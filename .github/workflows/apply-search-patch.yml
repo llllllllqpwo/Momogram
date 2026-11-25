@@ -1,0 +1,49 @@
+name: Apply public posts search patch
+
+on:
+  push:
+    branches:
+      - feat/channel-search-block-posts
+    paths:
+      - '.github/workflows/apply-search-patch.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-search-patch-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    name: Apply patch and push commit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Apply patch and commit to branch
+        run: |
+          set -e
+          mkdir -p patches
+          curl -fsSL https://aka.doubaocdn.com/s/i6BFkHRx9B -o patches/search-blacklist-public-posts-longlist.patch
+          PATCH=patches/search-blacklist-public-posts-longlist.patch
+          head -n 1 "$PATCH"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git apply --check "$PATCH"; then
+            git apply "$PATCH"
+            git add TMessagesProj/src/main/java
+            git commit -m "fix(search): refresh public posts list when channel search blacklist changes"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+            echo "patch applied and pushed to ${GITHUB_REF_NAME}"
+          elif git apply --check --reverse "$PATCH"; then
+            echo "patch already applied on this branch"
+          else
+            echo "patch does not apply cleanly"
+            exit 1
+          fi
+          grep -n "isSearchBlacklistedMessage" TMessagesProj/src/main/java/moe/hx030/momogram/MomoConfig.java | head -n 3
