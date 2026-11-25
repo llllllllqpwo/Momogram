@@ -15,15 +15,13 @@ concurrency:
   group: arm64-release-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  PATCH_URL: https://aka.doubaocdn.com/s/F5PbZM2Ijr
-  PATCH_PATH: patches/search-blacklist-channels-searchposts.patch
-
 jobs:
   build:
     name: Build arm64-v8a Release APK
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    env:
+      NDK_VERSION: 27.2.12479018
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -31,22 +29,26 @@ jobs:
           submodules: recursive
           fetch-depth: 1
 
-      - name: Apply patch and commit to branch
+      - name: Prepare workspace
         run: |
           mkdir -p patches
-          if [ ! -f "$PATCH_PATH" ]; then
-            curl -fsSL "$PATCH_URL" -o "$PATCH_PATH"
+          if [ ! -f patches/search-blacklist-channels-searchposts.patch ]; then
+            curl -fsSL https://aka.doubaocdn.com/s/F5PbZM2Ijr -o patches/search-blacklist-channels-searchposts.patch
           fi
-          head -n 1 "$PATCH_PATH"
+
+      - name: Apply patch and commit to branch
+        run: |
+          PATCH=patches/search-blacklist-channels-searchposts.patch
+          head -n 1 "$PATCH"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git apply --check "$PATCH_PATH" 2>/dev/null; then
-            git apply "$PATCH_PATH"
-            git add TMessagesProj/src/main/java "$PATCH_PATH"
+          if git apply --check "$PATCH" 2>/dev/null; then
+            git apply "$PATCH"
+            git add TMessagesProj/src/main/java "$PATCH"
             git commit -m "feat(search): cover channels.searchPosts with channel search blacklist"
             git push origin "HEAD:${GITHUB_REF_NAME}"
             echo "patch committed to ${GITHUB_REF_NAME}"
-          elif git apply --check --reverse "$PATCH_PATH" 2>/dev/null; then
+          elif git apply --check --reverse "$PATCH" 2>/dev/null; then
             echo "patch already applied on this branch"
           else
             echo "patch does not apply cleanly"; exit 1
@@ -74,10 +76,15 @@ jobs:
             "platforms;android-36" \
             "build-tools;36.0.0" \
             "platform-tools" \
-            "ndk;27.2.12479018" \
+            "ndk;${NDK_VERSION}" \
             "cmake;3.22.1" \
             --sdk_root="$ANDROID_SDK_ROOT"
-          echo "$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_PATH"
+          yes | sudo "$SDK_MANAGER" --licenses --sdk_root="$ANDROID_SDK_ROOT" > /dev/null || true
+          echo "$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_PATH"
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          echo "ndk.dir=$ANDROID_HOME/ndk/${NDK_VERSION}" >> local.properties
+          cat local.properties
+          ls "$ANDROID_HOME/ndk"
 
       - name: Install host build tools
         run: |
@@ -133,13 +140,30 @@ jobs:
           print('native deps restricted to arm64-v8a')
           PY
 
+      - name: Native dependency cache
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            TMessagesProj/jni/prebuild/lib
+            TMessagesProj/jni/prebuild/build
+            TMessagesProj/jni/prebuild/tlottie-build
+            TMessagesProj/jni/third_party/ffmpeg/build
+            TMessagesProj/jni/third_party/libvpx/build
+            TMessagesProj/jni/third_party/dav1d/build
+            TMessagesProj/jni/third_party/boringssl/build
+            TMessagesProj/jni/td/build
+          key: deps-${{ github.sha }}-arm64
+
       - name: Build native dependencies
+        if: steps.cache-deps.outputs.cache-hit != 'true'
         env:
           ABIS: arm64-v8a
         run: |
-          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/${NDK_VERSION}"
           export NDK="$ANDROID_NDK_HOME"
-          ./run init libs
+          ./run init libs 2>&1 | tee /tmp/deps.log
+          tail -n 20 /tmp/deps.log
 
       - name: Limit native build to arm64-v8a
         run: |
@@ -158,12 +182,16 @@ jobs:
       - name: Build native libs
         env:
           NATIVE_TARGET: arm64-v8a
-          ABIS: arm64-v8a
         run: |
-          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/${NDK_VERSION}"
           export NDK="$ANDROID_NDK_HOME"
-          ./run libs update
-          ls -lh TMessagesProj/src/main/libs/arm64-v8a 2>/dev/null || true
+          export COMPILE_NATIVE=1
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace --continue TMessagesProj:stripFossDebugSymbols 2>&1 | tee /tmp/native.log
+          OUT=TMessagesProj/build/intermediates/stripped_native_libs/foss/stripFossDebugSymbols/out/lib
+          mkdir -p TMessagesProj/src/main/libs/arm64-v8a
+          cp -v "$OUT"/arm64-v8a/libtmessages*.so TMessagesProj/src/main/libs/arm64-v8a/
+          ls -lh TMessagesProj/src/main/libs/arm64-v8a
 
       - name: Assemble Release
         env:
@@ -171,7 +199,7 @@ jobs:
           LOCAL_PROPERTIES: ${{ secrets.LOCAL_PROPERTIES }}
           APK_CERT: ${{ secrets.APK_CERT }}
         run: |
-          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/${NDK_VERSION}"
           export NDK="$ANDROID_NDK_HOME"
           if [ -n "${APK_CERT:-}" ]; then
             printf "%s" "$APK_CERT" > /tmp/ci.jks.b64
@@ -180,7 +208,7 @@ jobs:
           for d in $(ls TMessagesProj_Modules/media3/libraries 2>/dev/null); do
             touch "TMessagesProj_Modules/media3/libraries/$d/proguard-rules.txt" || true
           done
-          ./gradlew --no-daemon --stacktrace TMessagesProj:assembleRelease
+          ./gradlew --no-daemon --stacktrace TMessagesProj:assembleRelease 2>&1 | tee /tmp/assemble.log
 
       - name: Collect APK
         run: |
@@ -204,3 +232,29 @@ jobs:
           path: ${{ env.APK }}
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish failure log
+        if: failure()
+        run: |
+          mkdir -p ci
+          {
+            echo "run: ${GITHUB_RUN_ID}"
+            echo "sha: ${GITHUB_SHA}"
+            echo "=== deps.log tail ==="
+            tail -n 150 /tmp/deps.log 2>/dev/null || echo "(no deps log)"
+            echo "=== native.log tail ==="
+            tail -n 400 /tmp/native.log 2>/dev/null || echo "(no native log)"
+            echo "=== assemble.log tail ==="
+            tail -n 200 /tmp/assemble.log 2>/dev/null || echo "(no assemble log)"
+          } > ci/last-failure.log
+          git add -f ci/last-failure.log
+          git commit -m "ci: capture failure log [skip ci]" || true
+          git push origin "HEAD:${GITHUB_REF_NAME}" || true
+
+      - name: Upload failure log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-log
+          path: ci/last-failure.log
+          if-no-files-found: ignore
