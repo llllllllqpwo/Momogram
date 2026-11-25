@@ -390,6 +390,7 @@ public class NotificationCenter {
 
     public static final int outgoingMessageTranslated = totalEvents++;
     public static final int forwardingMessageTranslated = totalEvents++;
+    public static final int searchBlacklistUpdated = totalEvents++;
 
     public static boolean alreadyLogged;
 

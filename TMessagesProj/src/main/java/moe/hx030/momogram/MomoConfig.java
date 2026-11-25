@@ -988,20 +988,29 @@ public class MomoConfig {
     public static void saveSearchBlacklist() {
         String str = Arrays.toString(searchBlacklistData.toArray()).replace(" ", "");
         searchBlacklist.setConfigString(str.substring(1, str.length() - 1));
+        searchBlacklistVersion++;
     }
 
     /**
      * 判断某个会话（频道/群/用户）是否被“从搜索结果中屏蔽”。
      * 所有搜索结果入口（普通聊天搜索、全局公开帖子搜索 channels.searchPosts、会话内标签搜索）都应走这里，
      * 避免各入口判断口径不一致。
+     * 同时兼容带符号/不带符号两种 ID 写法，防止资料页写入的 ID 与消息 peer 推导出的 ID 正负号不一致。
      */
     public static boolean isSearchBlacklistedDialog(long dialogId) {
-        return searchBlacklistData.contains(dialogId);
+        if (dialogId == 0) return false;
+        return searchBlacklistData.contains(dialogId) || searchBlacklistData.contains(-dialogId);
     }
 
     public static boolean isSearchBlacklistedMessage(TLRPC.Message message) {
         return message != null && isSearchBlacklistedDialog(MessageObject.getDialogId(message));
     }
+
+    /**
+     * 黑名单版本号：每次黑名单内容变化都会自增。
+     * 搜索列表可据此丢弃屏蔽前缓存的旧结果，避免“已经屏蔽了但长列表里还在”。
+     */
+    public static int searchBlacklistVersion = 0;
 
     public static void applyPerformanceClassOverride(Integer c) {
         if (c == null && (c = MomoConfig.perfClassOverride.Int()) == -1) return;

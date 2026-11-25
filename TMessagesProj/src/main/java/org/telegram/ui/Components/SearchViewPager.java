@@ -1401,7 +1401,8 @@ public class SearchViewPager extends ViewPagerFixed implements FilteredSearchVie
             .add(NotificationCenter.dialogDeleted)
             .add(NotificationCenter.dialogsNeedReload)
             .add(NotificationCenter.reloadWebappsHints)
-            .add(NotificationCenter.storiesListUpdated);
+            .add(NotificationCenter.storiesListUpdated)
+            .add(NotificationCenter.searchBlacklistUpdated);
 
         attached = true;
 
@@ -1438,6 +1439,17 @@ public class SearchViewPager extends ViewPagerFixed implements FilteredSearchVie
         } else if (id == NotificationCenter.storiesListUpdated) {
             if (args[0] == hashtagSearchAdapter.list) {
                 hashtagSearchAdapter.update(true);
+            }
+        } else if (id == NotificationCenter.searchBlacklistUpdated) {
+            // 屏蔽一个频道后，正在展示的公开贴文列表（默认结果 / 显示更多后的长列表 / 帖子页）要立即重新过滤。
+            if (dialogsSearchAdapter != null) {
+                dialogsSearchAdapter.onBlacklistChanged();
+            }
+            if (hashtagSearchAdapter != null) {
+                hashtagSearchAdapter.onBlacklistChanged();
+            }
+            if (postsSearchContainer != null) {
+                postsSearchContainer.onBlacklistChanged();
             }
         }
     }

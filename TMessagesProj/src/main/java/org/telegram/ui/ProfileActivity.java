@@ -3105,14 +3105,18 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
                     presentFragment(fragment);
                 } else if (id == block_from_search) {
                     long did = getDialogId();
-                    if (MomoConfig.searchBlacklistData.contains(did)) {
+                    if (MomoConfig.isSearchBlacklistedDialog(did)) {
                         MomoConfig.searchBlacklistData.remove(did);
+                        if (MomoConfig.isSearchBlacklistedDialog(did)) {
+                            MomoConfig.searchBlacklistData.remove(-did);
+                        }
                         blockFromSearchItem.setText(getString(R.string.SearchBlacklistShort));
                     } else {
                         MomoConfig.searchBlacklistData.add(did);
                         blockFromSearchItem.setText(getString(R.string.SearchBlacklistRevert));
                     }
                     MomoConfig.saveSearchBlacklist();
+                    NotificationCenter.getInstance(currentAccount).postNotificationName(NotificationCenter.searchBlacklistUpdated);
                 } else if (id == add_to_folder) {
                     showAddCurrentChatToFolderSheet();
                 } else if (id == all_media_spoiler) {
@@ -13412,7 +13416,7 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
             }
 
             if (MomoConfig.profileShowBlockSearch.Bool()) {
-                int blockFromSearchTxt = (MomoConfig.searchBlacklistData.contains(getDialogId()) ?
+                int blockFromSearchTxt = (MomoConfig.isSearchBlacklistedDialog(getDialogId()) ?
                         R.string.SearchBlacklistRevert : R.string.SearchBlacklistShort);
                 if (!addedGap) {
                     addedGap = true;

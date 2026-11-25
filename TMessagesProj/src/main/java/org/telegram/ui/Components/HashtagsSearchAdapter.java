@@ -31,14 +31,23 @@ public class HashtagsSearchAdapter extends UniversalAdapter {
     }
 
     private boolean hadStories;
+    private int blacklistVersion = -1;
+
     public void fillItems(ArrayList<UItem> items, UniversalAdapter adapter) {
+        final boolean pruned = pruneBlacklistedMessages();
         boolean hasStories = hasList && list != null && list.getLoadedCount() > 0;
         if (hasStories) {
             items.add(MessagesSearchAdapter.StoriesView.Factory.asStoriesList(list));
         }
         hadStories = hasStories;
+        int shown = 0;
         for (int i = 0; i < messages.size(); ++i) {
-            items.add(UItem.asSearchMessage(1 + i, messages.get(i)));
+            final MessageObject msg = messages.get(i);
+            // 兜底：即使列表里残留屏蔽前的旧数据，也不进入渲染。
+            if (MomoConfig.isSearchBlacklistedMessage(msg.messageOwner)) {
+                continue;
+            }
+            items.add(UItem.asSearchMessage(1 + (shown++), msg));
         }
         if (loading || !endReached) {
             items.add(UItem.asFlicker(-2, FlickerLoadingView.DIALOG_TYPE));
@@ -50,6 +59,52 @@ public class HashtagsSearchAdapter extends UniversalAdapter {
                 scrollToTop(true);
             });
         }
+        if (pruned && shown == 0 && !endReached && !loading && !TextUtils.isEmpty(lastQuery)) {
+            AndroidUtilities.runOnUIThread(() -> {
+                if (!loading) {
+                    search(lastQuery);
+                }
+            });
+        }
+    }
+
+    /** 黑名单变化时由搜索界面主动调用：立刻把已显示的公开贴文重新过滤，必要时续拉下一页。 */
+    public void onBlacklistChanged() {
+        final boolean pruned = pruneBlacklistedMessages();
+        update(true);
+        int visible = 0;
+        for (MessageObject msg : messages) {
+            if (!MomoConfig.isSearchBlacklistedMessage(msg.messageOwner)) visible++;
+        }
+        if (pruned && visible == 0 && !endReached && !loading && !TextUtils.isEmpty(lastQuery)) {
+            final String query = lastQuery;
+            AndroidUtilities.runOnUIThread(() -> {
+                if (!loading) {
+                    search(query);
+                }
+            });
+        }
+    }
+
+    /** 黑名单发生变化时，把此前已经缓存在内存里的公开贴文清掉，并按新数量修正翻页计数。 */
+    private boolean pruneBlacklistedMessages() {
+        if (blacklistVersion == MomoConfig.searchBlacklistVersion) {
+            return false;
+        }
+        blacklistVersion = MomoConfig.searchBlacklistVersion;
+        final int before = messages.size();
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            if (MomoConfig.isSearchBlacklistedMessage(messages.get(i).messageOwner)) {
+                messages.remove(i);
+            }
+        }
+        final int removed = before - messages.size();
+        if (removed > 0) {
+            hiddenCount += removed;
+            totalCount = Math.max(messages.size(), totalCount - removed);
+            return true;
+        }
+        return false;
     }
 
     protected boolean loading;
@@ -69,11 +124,21 @@ public class HashtagsSearchAdapter extends UniversalAdapter {
         if (TextUtils.equals(hashtag, hashtagQuery)) return;
         cancel();
         this.messages.clear();
-        this.messages.addAll(messages);
-        this.totalCount = totalCount;
-        endReached = totalCount > messages.size();
+        int hidden = 0;
+        for (MessageObject msg : messages) {
+            if (msg == null) continue;
+            if (MomoConfig.isSearchBlacklistedMessage(msg.messageOwner)) {
+                hidden++;
+                continue;
+            }
+            this.messages.add(msg);
+        }
+        hiddenCount = hidden;
+        this.totalCount = Math.max(0, totalCount);
+        endReached = this.totalCount > this.messages.size();
         this.lastRate = messagesLastRate;
         hashtagQuery = hashtag;
+        blacklistVersion = MomoConfig.searchBlacklistVersion;
         update(true);
     }
 

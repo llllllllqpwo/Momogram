@@ -128,6 +128,7 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
     public int publicPostsLastRate;
     public ArrayList<MessageObject> publicPosts = new ArrayList<>();
     public String publicPostsHashtag;
+    private int publicPostsBlacklistVersion = -1;
     private final ArrayList<ContactsController.Contact> searchContacts = new ArrayList<>();
     private final ArrayList<TLRPC.TL_forumTopic> searchTopics = new ArrayList<>();
     private ArrayList<CharSequence> searchResultNames = new ArrayList<>();
@@ -628,13 +629,14 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
                         }
                         nextSearchRate = res.next_rate;
                         for (int a = 0; a < messageObjects.size(); a++) {
-                            TLRPC.Message message = res.messages.get(a);
+                            MessageObject msg = messageObjects.get(a);
+                            // 使用了过滤后的列表，索引必须与 msg 自身对齐，不能再用 res.messages.get(a)
+                            TLRPC.Message message = msg.messageOwner;
                             long did = MessageObject.getDialogId(message);
                             int maxId = MessagesController.getInstance(currentAccount).deletedHistory.get(did);
                             if (maxId != 0 && message.id <= maxId) {
                                 continue;
                             }
-                            MessageObject msg = messageObjects.get(a);
                             if (!searchForumResultMessages.isEmpty()) {
                                 boolean foundDuplicate = false;
                                 for (int i = 0; i < searchForumResultMessages.size(); ++i) {
@@ -1365,8 +1367,34 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
         return recent != null ? recent.size() : 0;
     }
 
+    /** 黑名单变化时由搜索界面主动调用，立即清理公开贴文预览并刷新列表。 */
+    public void onBlacklistChanged() {
+        publicPostsBlacklistVersion = -1;
+        prunePublicPosts();
+        notifyDataSetChanged();
+    }
+
+    /** 黑名单变化后清理此前缓存的公开贴文预览，避免“显示更多”入口继续带出已屏蔽频道的帖子。 */
+    private void prunePublicPosts() {
+        if (publicPostsBlacklistVersion == MomoConfig.searchBlacklistVersion) {
+            return;
+        }
+        publicPostsBlacklistVersion = MomoConfig.searchBlacklistVersion;
+        final int before = publicPosts.size();
+        for (int i = publicPosts.size() - 1; i >= 0; i--) {
+            if (MomoConfig.isSearchBlacklistedMessage(publicPosts.get(i).messageOwner)) {
+                publicPosts.remove(i);
+            }
+        }
+        final int removed = before - publicPosts.size();
+        if (removed > 0) {
+            publicPostsTotalCount = Math.max(publicPosts.size(), publicPostsTotalCount - removed);
+        }
+    }
+
     @Override
     public int getItemCount() {
+        prunePublicPosts();
         if (waitingResponseCount == 3) {
             return 0;
         }

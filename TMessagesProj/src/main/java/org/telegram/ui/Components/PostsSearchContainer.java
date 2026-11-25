@@ -474,7 +474,45 @@ public class PostsSearchContainer extends FrameLayout {
     }
 
     private boolean isEmpty;
+    private int blacklistVersion = -1;
+
+    private boolean pruneBlacklistedMessages() {
+        if (blacklistVersion == MomoConfig.searchBlacklistVersion) {
+            return false;
+        }
+        blacklistVersion = MomoConfig.searchBlacklistVersion;
+        boolean removed = false;
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            if (MomoConfig.isSearchBlacklistedMessage(messages.get(i).messageOwner)) {
+                messages.remove(i);
+                removed = true;
+            }
+        }
+        for (int i = newsMessages.size() - 1; i >= 0; i--) {
+            if (MomoConfig.isSearchBlacklistedMessage(newsMessages.get(i).messageOwner)) {
+                newsMessages.remove(i);
+                removed = true;
+            }
+        }
+        return removed;
+    }
+
+    /** 黑名单变化时由搜索界面主动调用：过滤已显示结果，整页被清空则续拉下一批。 */
+    public void onBlacklistChanged() {
+        final boolean pruned = pruneBlacklistedMessages();
+        updateEmptyView();
+        listView.adapter.update(true);
+        if (pruned && flood != null && !loading) {
+            if (!TextUtils.isEmpty(lastQuery) && messages.isEmpty() && !endReached) {
+                load(false);
+            } else if (TextUtils.isEmpty(lastQuery) && newsMessages.isEmpty() && !newsMessagesEndReached && newsMessagesLastPeer != null) {
+                load(false);
+            }
+        }
+    }
+
     private void fillItems(ArrayList<UItem> items, UniversalAdapter adapter) {
+        final boolean pruned = pruneBlacklistedMessages();
         if (flood == null) {
             items.add(UItem.asFlicker(-1, FlickerLoadingView.DIALOG_CELL_TYPE));
             items.add(UItem.asFlicker(-2, FlickerLoadingView.DIALOG_CELL_TYPE));
@@ -483,18 +521,29 @@ public class PostsSearchContainer extends FrameLayout {
             return;
         }
         final boolean news = TextUtils.isEmpty(lastQuery);
+        int shown = 0;
         if (news) {
-            if (!newsMessages.isEmpty()) {
+            for (MessageObject msg : newsMessages) {
+                if (MomoConfig.isSearchBlacklistedMessage(msg.messageOwner)) continue;
+                shown++;
+            }
+            if (shown > 0) {
                 items.add(UItem.asGraySection(getString(R.string.SearchPostsHeaderNews)));
             }
             for (MessageObject msg : newsMessages) {
+                if (MomoConfig.isSearchBlacklistedMessage(msg.messageOwner)) continue;
                 items.add(UItem.asSearchMessage(msg));
             }
         } else {
-            if (!messages.isEmpty()) {
+            for (MessageObject msg : messages) {
+                if (MomoConfig.isSearchBlacklistedMessage(msg.messageOwner)) continue;
+                shown++;
+            }
+            if (shown > 0) {
                 items.add(UItem.asGraySection(getString(R.string.SearchPostsHeaderFound)));
             }
             for (MessageObject msg : messages) {
+                if (MomoConfig.isSearchBlacklistedMessage(msg.messageOwner)) continue;
                 items.add(UItem.asSearchMessage(msg));
             }
         }
@@ -508,6 +557,17 @@ public class PostsSearchContainer extends FrameLayout {
             items.add(UItem.asFlicker(queryid * 3 + 2, FlickerLoadingView.DIALOG_CELL_TYPE));
         }
         isEmpty = items.isEmpty();
+        if (pruned && shown == 0 && !loading) {
+            // 屏蔽后整页清空时，自动补拉下一批，避免长列表停在空白。
+            AndroidUtilities.runOnUIThread(() -> {
+                if (flood == null || loading) return;
+                if (news && !newsMessagesEndReached && newsMessagesLastPeer != null) {
+                    load(false);
+                } else if (!news && !endReached && messages.isEmpty() && !TextUtils.isEmpty(lastQuery)) {
+                    load(false);
+                }
+            });
+        }
     }
 
     private void onItemClick(UItem item, View view, int position, float x, float y) {
