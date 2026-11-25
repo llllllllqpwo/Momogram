@@ -15,6 +15,8 @@ import org.telegram.ui.Stories.StoriesController;
 
 import java.util.ArrayList;
 
+import moe.hx030.momogram.MomoConfig;
+
 public class HashtagsSearchAdapter extends UniversalAdapter {
 
     private final int currentAccount;
@@ -55,9 +57,12 @@ public class HashtagsSearchAdapter extends UniversalAdapter {
     private int reqId = -1;
     private boolean endReached;
     private int totalCount;
+    private int hiddenCount;
     private String lastQuery;
     private String hashtagQuery;
     private int lastRate;
+    private int lastOffsetId;
+    private TLRPC.Peer lastOffsetPeer;
     private Runnable searchRunnable;
 
     public void setInitialData(String hashtag, ArrayList<MessageObject> messages, int messagesLastRate, int totalCount) {
@@ -81,6 +86,10 @@ public class HashtagsSearchAdapter extends UniversalAdapter {
             messages.clear();
             endReached = false;
             totalCount = 0;
+            hiddenCount = 0;
+            lastRate = 0;
+            lastOffsetId = 0;
+            lastOffsetPeer = null;
             cancel();
         } else if (loading) {
             return;
@@ -105,10 +114,10 @@ public class HashtagsSearchAdapter extends UniversalAdapter {
             req.flags |= 1;
             req.hashtag = this.hashtagQuery = hashtag;
             req.limit = 10;
-            if (!messages.isEmpty()) {
-                MessageObject lastMessage = messages.get(messages.size() - 1);
+            if (lastOffsetPeer != null) {
                 req.offset_rate = lastRate;
-                req.offset_peer = MessagesController.getInstance(currentAccount).getInputPeer(lastMessage.messageOwner.peer_id);
+                req.offset_id = lastOffsetId;
+                req.offset_peer = MessagesController.getInstance(currentAccount).getInputPeer(lastOffsetPeer);
             } else {
                 req.offset_peer = new TLRPC.TL_inputPeerEmpty();
             }
@@ -128,13 +137,26 @@ public class HashtagsSearchAdapter extends UniversalAdapter {
                     lastRate = msgs.next_rate;
                     MessagesController.getInstance(currentAccount).putUsers(msgs.users, false);
                     MessagesController.getInstance(currentAccount).putChats(msgs.chats, false);
+                    int hidden = 0;
                     for (int i = 0; i < msgs.messages.size(); ++i) {
                         final TLRPC.Message msg = msgs.messages.get(i);
+                        if (MomoConfig.isSearchBlacklistedMessage(msg)) {
+                            hidden++;
+                            continue;
+                        }
                         final MessageObject messageObject = new MessageObject(currentAccount, msg, false, true);
                         messageObject.setQuery(finalQuery);
                         messages.add(messageObject);
                     }
-                    endReached = messages.size() >= totalCount;
+                    // 翻页锚点取服务端原始返回的最后一条，避免整页被屏蔽后锚点丢失导致重复拉取。
+                    if (!msgs.messages.isEmpty()) {
+                        final TLRPC.Message lastRaw = msgs.messages.get(msgs.messages.size() - 1);
+                        lastOffsetId = lastRaw.realId != 0 ? lastRaw.realId : lastRaw.id;
+                        lastOffsetPeer = lastRaw.peer_id;
+                    }
+                    hiddenCount += hidden;
+                    totalCount = Math.max(0, totalCount - hiddenCount);
+                    endReached = messages.size() >= totalCount || msgs.messages.isEmpty();
                     checkBottom();
                 } else {
                     endReached = true;

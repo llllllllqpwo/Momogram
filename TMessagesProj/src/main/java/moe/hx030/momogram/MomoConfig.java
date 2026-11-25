@@ -14,6 +14,7 @@ import org.telegram.messenger.ApplicationLoader;
 import org.telegram.messenger.BuildVars;
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.MediaDataController;
+import org.telegram.messenger.MessageObject;
 import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.R;
 import org.telegram.messenger.SharedConfig;
@@ -975,7 +976,6 @@ public class MomoConfig {
     public static void applySearchBlacklist() {
         String[] queries = searchBlacklist.String().split(",");
         searchBlacklistData.clear();
-        if (queries.length <= 1) return;
         for (String q : queries) {
             if (q.isBlank()) continue;
             try {
@@ -988,6 +988,19 @@ public class MomoConfig {
     public static void saveSearchBlacklist() {
         String str = Arrays.toString(searchBlacklistData.toArray()).replace(" ", "");
         searchBlacklist.setConfigString(str.substring(1, str.length() - 1));
+    }
+
+    /**
+     * 判断某个会话（频道/群/用户）是否被“从搜索结果中屏蔽”。
+     * 所有搜索结果入口（普通聊天搜索、全局公开帖子搜索 channels.searchPosts、会话内标签搜索）都应走这里，
+     * 避免各入口判断口径不一致。
+     */
+    public static boolean isSearchBlacklistedDialog(long dialogId) {
+        return searchBlacklistData.contains(dialogId);
+    }
+
+    public static boolean isSearchBlacklistedMessage(TLRPC.Message message) {
+        return message != null && isSearchBlacklistedDialog(MessageObject.getDialogId(message));
     }
 
     public static void applyPerformanceClassOverride(Integer c) {

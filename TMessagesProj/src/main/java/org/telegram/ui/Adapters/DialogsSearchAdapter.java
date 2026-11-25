@@ -595,7 +595,7 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
                 }
                 for (int a = 0; a < res.messages.size(); a++) {
                     TLRPC.Message message = res.messages.get(a);
-                    if (MomoConfig.searchBlacklistData.contains(MessageObject.getDialogId(message))) continue;
+                    if (MomoConfig.isSearchBlacklistedMessage(message)) continue;
                     MessageObject messageObject = new MessageObject(currentAccount, message, usersMap, chatsMap, false, true);
                     messageObjects.add(messageObject);
                     messageObject.setQuery(query);
@@ -1330,15 +1330,20 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
                             } else if (msgs instanceof TLRPC.TL_messages_messagesSlice) {
                                 totalCount = ((TLRPC.TL_messages_messagesSlice) msgs).count;
                             }
-                            publicPostsTotalCount = totalCount;
                             publicPostsLastRate = msgs.next_rate;
                             publicPostsHashtag = finalHashtag;
                             MessagesController.getInstance(currentAccount).putUsers(msgs.users, false);
                             MessagesController.getInstance(currentAccount).putChats(msgs.chats, false);
+                            int hiddenCount = 0;
                             for (int i = 0; i < msgs.messages.size(); ++i) {
                                 TLRPC.Message msg = msgs.messages.get(i);
+                                if (MomoConfig.isSearchBlacklistedMessage(msg)) {
+                                    hiddenCount++;
+                                    continue;
+                                }
                                 publicPosts.add(new MessageObject(currentAccount, msg, false, true));
                             }
+                            publicPostsTotalCount = Math.max(0, totalCount - hiddenCount);
                             if (delegate != null) {
                                 delegate.searchStateChanged(waitingResponseCount > 0, true);
                             }

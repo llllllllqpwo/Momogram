@@ -258,7 +258,7 @@ public class HashtagSearchController {
                     search.lastOffsetRate = messages.next_rate;
 
                     for (MessageObject msg : messageObjects) {
-                        if (MomoConfig.searchBlacklistData.contains(msg.getDialogId())) continue;
+                        if (MomoConfig.isSearchBlacklistedDialog(msg.getDialogId())) continue;
                         MessageCompositeID compositeId = new MessageCompositeID(msg.messageOwner);
                         Integer id = search.generatedIds.get(compositeId);
                         if (id == null) {

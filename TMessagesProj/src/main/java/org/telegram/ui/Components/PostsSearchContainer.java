@@ -43,6 +43,8 @@ import org.telegram.ui.Stars.StarsIntroActivity;
 import org.telegram.ui.Stories.DarkThemeResourceProvider;
 import org.telegram.ui.Stories.recorder.ButtonWithCounterView;
 
+import moe.hx030.momogram.MomoConfig;
+
 import java.util.ArrayList;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -57,10 +59,14 @@ public class PostsSearchContainer extends FrameLayout {
 
     private final ArrayList<MessageObject> newsMessages = new ArrayList<MessageObject>();
     private int newsMessagesLastRate;
+    private int newsMessagesLastId;
+    private TLRPC.Peer newsMessagesLastPeer;
     private boolean newsMessagesEndReached;
 
     private final ArrayList<MessageObject> messages = new ArrayList<MessageObject>();
     private int lastRate;
+    private int lastId;
+    private TLRPC.Peer lastPeer;
     private boolean endReached;
 
     private boolean loading;
@@ -224,20 +230,18 @@ public class PostsSearchContainer extends FrameLayout {
         req.query = lastQuery;
         req.limit = 30;
         if (news) {
-            if (!newsMessages.isEmpty()) {
-                final MessageObject lastMessage = newsMessages.get(newsMessages.size() - 1);
+            if (newsMessagesLastPeer != null) {
                 req.offset_rate = newsMessagesLastRate;
-                req.offset_id = lastMessage.getRealId();
-                req.offset_peer = messagesController.getInputPeer(lastMessage.messageOwner.peer_id);
+                req.offset_id = newsMessagesLastId;
+                req.offset_peer = messagesController.getInputPeer(newsMessagesLastPeer);
             } else {
                 req.offset_peer = new TLRPC.TL_inputPeerEmpty();
             }
         } else {
-            if (!messages.isEmpty()) {
-                final MessageObject lastMessage = messages.get(messages.size() - 1);
+            if (lastPeer != null) {
                 req.offset_rate = lastRate;
-                req.offset_id = lastMessage.getRealId();
-                req.offset_peer = messagesController.getInputPeer(lastMessage.messageOwner.peer_id);
+                req.offset_id = lastId;
+                req.offset_peer = messagesController.getInputPeer(lastPeer);
             } else {
                 req.offset_peer = new TLRPC.TL_inputPeerEmpty();
             }
@@ -266,11 +270,28 @@ public class PostsSearchContainer extends FrameLayout {
                 final ArrayList<MessageObject> messages = news ? newsMessages : this.messages;
                 final boolean firstMessages = messages.isEmpty();
                 for (TLRPC.Message message : r.messages) {
+                    if (MomoConfig.isSearchBlacklistedMessage(message)) {
+                        continue;
+                    }
                     final MessageObject msg = new MessageObject(currentAccount, message, false, false);
                     if (!news) {
                         msg.setQuery(req.query);
                     }
                     messages.add(msg);
+                }
+
+                // 翻页锚点要基于服务端原始返回的最后一条消息，而不是过滤后的列表，
+                // 否则整页都被屏蔽时会丢掉锚点、重复请求同一页。
+                if (!r.messages.isEmpty()) {
+                    final TLRPC.Message lastRaw = r.messages.get(r.messages.size() - 1);
+                    final int lastRawId = lastRaw.realId != 0 ? lastRaw.realId : lastRaw.id;
+                    if (news) {
+                        newsMessagesLastId = lastRawId;
+                        newsMessagesLastPeer = lastRaw.peer_id;
+                    } else {
+                        lastId = lastRawId;
+                        lastPeer = lastRaw.peer_id;
+                    }
                 }
 
                 if (!news) {
@@ -294,6 +315,15 @@ public class PostsSearchContainer extends FrameLayout {
                     } else if (r instanceof TLRPC.TL_messages_channelMessages) {
                         newsMessagesLastRate = 0;
                         newsMessagesEndReached = true;
+                    }
+                }
+
+                // 服务端已经返回空页时直接收尾，避免屏蔽整页后继续用同一锚点重试。
+                if (r.messages.isEmpty()) {
+                    if (news) {
+                        newsMessagesEndReached = true;
+                    } else {
+                        endReached = true;
                     }
                 }
 
@@ -372,6 +402,8 @@ public class PostsSearchContainer extends FrameLayout {
         lastQuery = q;
         if (TextUtils.isEmpty(q)) {
             lastRate = 0;
+            lastId = 0;
+            lastPeer = null;
             queryid++;
             endReached = false;
             messages.clear();
@@ -381,6 +413,8 @@ public class PostsSearchContainer extends FrameLayout {
             loadFlood(q);
 
             lastRate = 0;
+            lastId = 0;
+            lastPeer = null;
             queryid++;
             endReached = false;
             messages.clear();

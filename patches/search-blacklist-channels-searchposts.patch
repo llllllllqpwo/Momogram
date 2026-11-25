@@ -1,0 +1,287 @@
+diff --git a/TMessagesProj/src/main/java/moe/hx030/momogram/MomoConfig.java b/TMessagesProj/src/main/java/moe/hx030/momogram/MomoConfig.java
+index a356d1c5..0e0cac68 100644
+--- a/TMessagesProj/src/main/java/moe/hx030/momogram/MomoConfig.java
++++ b/TMessagesProj/src/main/java/moe/hx030/momogram/MomoConfig.java
+@@ -14,6 +14,7 @@ import org.telegram.messenger.ApplicationLoader;
+ import org.telegram.messenger.BuildVars;
+ import org.telegram.messenger.LocaleController;
+ import org.telegram.messenger.MediaDataController;
++import org.telegram.messenger.MessageObject;
+ import org.telegram.messenger.MessagesController;
+ import org.telegram.messenger.R;
+ import org.telegram.messenger.SharedConfig;
+@@ -975,7 +976,6 @@ public class MomoConfig {
+     public static void applySearchBlacklist() {
+         String[] queries = searchBlacklist.String().split(",");
+         searchBlacklistData.clear();
+-        if (queries.length <= 1) return;
+         for (String q : queries) {
+             if (q.isBlank()) continue;
+             try {
+@@ -990,6 +990,19 @@ public class MomoConfig {
+         searchBlacklist.setConfigString(str.substring(1, str.length() - 1));
+     }
+ 
++    /**
++     * 判断某个会话（频道/群/用户）是否被“从搜索结果中屏蔽”。
++     * 所有搜索结果入口（普通聊天搜索、全局公开帖子搜索 channels.searchPosts、会话内标签搜索）都应走这里，
++     * 避免各入口判断口径不一致。
++     */
++    public static boolean isSearchBlacklistedDialog(long dialogId) {
++        return searchBlacklistData.contains(dialogId);
++    }
++
++    public static boolean isSearchBlacklistedMessage(TLRPC.Message message) {
++        return message != null && isSearchBlacklistedDialog(MessageObject.getDialogId(message));
++    }
++
+     public static void applyPerformanceClassOverride(Integer c) {
+         if (c == null && (c = MomoConfig.perfClassOverride.Int()) == -1) return;
+         SharedConfig.overrideDevicePerformanceClass((c == 0) ? -1 : (c - 1));
+diff --git a/TMessagesProj/src/main/java/org/telegram/messenger/HashtagSearchController.java b/TMessagesProj/src/main/java/org/telegram/messenger/HashtagSearchController.java
+index 6454c847..c28a3491 100644
+--- a/TMessagesProj/src/main/java/org/telegram/messenger/HashtagSearchController.java
++++ b/TMessagesProj/src/main/java/org/telegram/messenger/HashtagSearchController.java
+@@ -258,7 +258,7 @@ public class HashtagSearchController {
+                     search.lastOffsetRate = messages.next_rate;
+ 
+                     for (MessageObject msg : messageObjects) {
+-                        if (MomoConfig.searchBlacklistData.contains(msg.getDialogId())) continue;
++                        if (MomoConfig.isSearchBlacklistedDialog(msg.getDialogId())) continue;
+                         MessageCompositeID compositeId = new MessageCompositeID(msg.messageOwner);
+                         Integer id = search.generatedIds.get(compositeId);
+                         if (id == null) {
+diff --git a/TMessagesProj/src/main/java/org/telegram/ui/Adapters/DialogsSearchAdapter.java b/TMessagesProj/src/main/java/org/telegram/ui/Adapters/DialogsSearchAdapter.java
+index 2dfcb287..6e5344d2 100644
+--- a/TMessagesProj/src/main/java/org/telegram/ui/Adapters/DialogsSearchAdapter.java
++++ b/TMessagesProj/src/main/java/org/telegram/ui/Adapters/DialogsSearchAdapter.java
+@@ -595,7 +595,7 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
+                 }
+                 for (int a = 0; a < res.messages.size(); a++) {
+                     TLRPC.Message message = res.messages.get(a);
+-                    if (MomoConfig.searchBlacklistData.contains(MessageObject.getDialogId(message))) continue;
++                    if (MomoConfig.isSearchBlacklistedMessage(message)) continue;
+                     MessageObject messageObject = new MessageObject(currentAccount, message, usersMap, chatsMap, false, true);
+                     messageObjects.add(messageObject);
+                     messageObject.setQuery(query);
+@@ -1330,15 +1330,20 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
+                             } else if (msgs instanceof TLRPC.TL_messages_messagesSlice) {
+                                 totalCount = ((TLRPC.TL_messages_messagesSlice) msgs).count;
+                             }
+-                            publicPostsTotalCount = totalCount;
+                             publicPostsLastRate = msgs.next_rate;
+                             publicPostsHashtag = finalHashtag;
+                             MessagesController.getInstance(currentAccount).putUsers(msgs.users, false);
+                             MessagesController.getInstance(currentAccount).putChats(msgs.chats, false);
++                            int hiddenCount = 0;
+                             for (int i = 0; i < msgs.messages.size(); ++i) {
+                                 TLRPC.Message msg = msgs.messages.get(i);
++                                if (MomoConfig.isSearchBlacklistedMessage(msg)) {
++                                    hiddenCount++;
++                                    continue;
++                                }
+                                 publicPosts.add(new MessageObject(currentAccount, msg, false, true));
+                             }
++                            publicPostsTotalCount = Math.max(0, totalCount - hiddenCount);
+                             if (delegate != null) {
+                                 delegate.searchStateChanged(waitingResponseCount > 0, true);
+                             }
+diff --git a/TMessagesProj/src/main/java/org/telegram/ui/Components/HashtagsSearchAdapter.java b/TMessagesProj/src/main/java/org/telegram/ui/Components/HashtagsSearchAdapter.java
+index a2e8cc6c..0c68b009 100644
+--- a/TMessagesProj/src/main/java/org/telegram/ui/Components/HashtagsSearchAdapter.java
++++ b/TMessagesProj/src/main/java/org/telegram/ui/Components/HashtagsSearchAdapter.java
+@@ -15,6 +15,8 @@ import org.telegram.ui.Stories.StoriesController;
+ 
+ import java.util.ArrayList;
+ 
++import moe.hx030.momogram.MomoConfig;
++
+ public class HashtagsSearchAdapter extends UniversalAdapter {
+ 
+     private final int currentAccount;
+@@ -55,9 +57,12 @@ public class HashtagsSearchAdapter extends UniversalAdapter {
+     private int reqId = -1;
+     private boolean endReached;
+     private int totalCount;
++    private int hiddenCount;
+     private String lastQuery;
+     private String hashtagQuery;
+     private int lastRate;
++    private int lastOffsetId;
++    private TLRPC.Peer lastOffsetPeer;
+     private Runnable searchRunnable;
+ 
+     public void setInitialData(String hashtag, ArrayList<MessageObject> messages, int messagesLastRate, int totalCount) {
+@@ -81,6 +86,10 @@ public class HashtagsSearchAdapter extends UniversalAdapter {
+             messages.clear();
+             endReached = false;
+             totalCount = 0;
++            hiddenCount = 0;
++            lastRate = 0;
++            lastOffsetId = 0;
++            lastOffsetPeer = null;
+             cancel();
+         } else if (loading) {
+             return;
+@@ -105,10 +114,10 @@ public class HashtagsSearchAdapter extends UniversalAdapter {
+             req.flags |= 1;
+             req.hashtag = this.hashtagQuery = hashtag;
+             req.limit = 10;
+-            if (!messages.isEmpty()) {
+-                MessageObject lastMessage = messages.get(messages.size() - 1);
++            if (lastOffsetPeer != null) {
+                 req.offset_rate = lastRate;
+-                req.offset_peer = MessagesController.getInstance(currentAccount).getInputPeer(lastMessage.messageOwner.peer_id);
++                req.offset_id = lastOffsetId;
++                req.offset_peer = MessagesController.getInstance(currentAccount).getInputPeer(lastOffsetPeer);
+             } else {
+                 req.offset_peer = new TLRPC.TL_inputPeerEmpty();
+             }
+@@ -128,13 +137,26 @@ public class HashtagsSearchAdapter extends UniversalAdapter {
+                     lastRate = msgs.next_rate;
+                     MessagesController.getInstance(currentAccount).putUsers(msgs.users, false);
+                     MessagesController.getInstance(currentAccount).putChats(msgs.chats, false);
++                    int hidden = 0;
+                     for (int i = 0; i < msgs.messages.size(); ++i) {
+                         final TLRPC.Message msg = msgs.messages.get(i);
++                        if (MomoConfig.isSearchBlacklistedMessage(msg)) {
++                            hidden++;
++                            continue;
++                        }
+                         final MessageObject messageObject = new MessageObject(currentAccount, msg, false, true);
+                         messageObject.setQuery(finalQuery);
+                         messages.add(messageObject);
+                     }
+-                    endReached = messages.size() >= totalCount;
++                    // 翻页锚点取服务端原始返回的最后一条，避免整页被屏蔽后锚点丢失导致重复拉取。
++                    if (!msgs.messages.isEmpty()) {
++                        final TLRPC.Message lastRaw = msgs.messages.get(msgs.messages.size() - 1);
++                        lastOffsetId = lastRaw.realId != 0 ? lastRaw.realId : lastRaw.id;
++                        lastOffsetPeer = lastRaw.peer_id;
++                    }
++                    hiddenCount += hidden;
++                    totalCount = Math.max(0, totalCount - hiddenCount);
++                    endReached = messages.size() >= totalCount || msgs.messages.isEmpty();
+                     checkBottom();
+                 } else {
+                     endReached = true;
+diff --git a/TMessagesProj/src/main/java/org/telegram/ui/Components/PostsSearchContainer.java b/TMessagesProj/src/main/java/org/telegram/ui/Components/PostsSearchContainer.java
+index ff8e10d8..0625f7d9 100644
+--- a/TMessagesProj/src/main/java/org/telegram/ui/Components/PostsSearchContainer.java
++++ b/TMessagesProj/src/main/java/org/telegram/ui/Components/PostsSearchContainer.java
+@@ -43,6 +43,8 @@ import org.telegram.ui.Stars.StarsIntroActivity;
+ import org.telegram.ui.Stories.DarkThemeResourceProvider;
+ import org.telegram.ui.Stories.recorder.ButtonWithCounterView;
+ 
++import moe.hx030.momogram.MomoConfig;
++
+ import java.util.ArrayList;
+ import java.util.regex.Matcher;
+ import java.util.regex.Pattern;
+@@ -57,10 +59,14 @@ public class PostsSearchContainer extends FrameLayout {
+ 
+     private final ArrayList<MessageObject> newsMessages = new ArrayList<MessageObject>();
+     private int newsMessagesLastRate;
++    private int newsMessagesLastId;
++    private TLRPC.Peer newsMessagesLastPeer;
+     private boolean newsMessagesEndReached;
+ 
+     private final ArrayList<MessageObject> messages = new ArrayList<MessageObject>();
+     private int lastRate;
++    private int lastId;
++    private TLRPC.Peer lastPeer;
+     private boolean endReached;
+ 
+     private boolean loading;
+@@ -224,20 +230,18 @@ public class PostsSearchContainer extends FrameLayout {
+         req.query = lastQuery;
+         req.limit = 30;
+         if (news) {
+-            if (!newsMessages.isEmpty()) {
+-                final MessageObject lastMessage = newsMessages.get(newsMessages.size() - 1);
++            if (newsMessagesLastPeer != null) {
+                 req.offset_rate = newsMessagesLastRate;
+-                req.offset_id = lastMessage.getRealId();
+-                req.offset_peer = messagesController.getInputPeer(lastMessage.messageOwner.peer_id);
++                req.offset_id = newsMessagesLastId;
++                req.offset_peer = messagesController.getInputPeer(newsMessagesLastPeer);
+             } else {
+                 req.offset_peer = new TLRPC.TL_inputPeerEmpty();
+             }
+         } else {
+-            if (!messages.isEmpty()) {
+-                final MessageObject lastMessage = messages.get(messages.size() - 1);
++            if (lastPeer != null) {
+                 req.offset_rate = lastRate;
+-                req.offset_id = lastMessage.getRealId();
+-                req.offset_peer = messagesController.getInputPeer(lastMessage.messageOwner.peer_id);
++                req.offset_id = lastId;
++                req.offset_peer = messagesController.getInputPeer(lastPeer);
+             } else {
+                 req.offset_peer = new TLRPC.TL_inputPeerEmpty();
+             }
+@@ -266,6 +270,9 @@ public class PostsSearchContainer extends FrameLayout {
+                 final ArrayList<MessageObject> messages = news ? newsMessages : this.messages;
+                 final boolean firstMessages = messages.isEmpty();
+                 for (TLRPC.Message message : r.messages) {
++                    if (MomoConfig.isSearchBlacklistedMessage(message)) {
++                        continue;
++                    }
+                     final MessageObject msg = new MessageObject(currentAccount, message, false, false);
+                     if (!news) {
+                         msg.setQuery(req.query);
+@@ -273,6 +280,20 @@ public class PostsSearchContainer extends FrameLayout {
+                     messages.add(msg);
+                 }
+ 
++                // 翻页锚点要基于服务端原始返回的最后一条消息，而不是过滤后的列表，
++                // 否则整页都被屏蔽时会丢掉锚点、重复请求同一页。
++                if (!r.messages.isEmpty()) {
++                    final TLRPC.Message lastRaw = r.messages.get(r.messages.size() - 1);
++                    final int lastRawId = lastRaw.realId != 0 ? lastRaw.realId : lastRaw.id;
++                    if (news) {
++                        newsMessagesLastId = lastRawId;
++                        newsMessagesLastPeer = lastRaw.peer_id;
++                    } else {
++                        lastId = lastRawId;
++                        lastPeer = lastRaw.peer_id;
++                    }
++                }
++
+                 if (!news) {
+                     if (r instanceof TLRPC.TL_messages_messagesSlice) {
+                         lastRate = r.next_rate;
+@@ -297,6 +318,15 @@ public class PostsSearchContainer extends FrameLayout {
+                     }
+                 }
+ 
++                // 服务端已经返回空页时直接收尾，避免屏蔽整页后继续用同一锚点重试。
++                if (r.messages.isEmpty()) {
++                    if (news) {
++                        newsMessagesEndReached = true;
++                    } else {
++                        endReached = true;
++                    }
++                }
++
+                 updateEmptyView();
+                 if (firstMessages) {
+                     listView.scrollToPosition(0);
+@@ -372,6 +402,8 @@ public class PostsSearchContainer extends FrameLayout {
+         lastQuery = q;
+         if (TextUtils.isEmpty(q)) {
+             lastRate = 0;
++            lastId = 0;
++            lastPeer = null;
+             queryid++;
+             endReached = false;
+             messages.clear();
+@@ -381,6 +413,8 @@ public class PostsSearchContainer extends FrameLayout {
+             loadFlood(q);
+ 
+             lastRate = 0;
++            lastId = 0;
++            lastPeer = null;
+             queryid++;
+             endReached = false;
+             messages.clear();
